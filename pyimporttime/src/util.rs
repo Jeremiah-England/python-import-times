@@ -34,16 +34,13 @@ pub fn write_html_or_open(html: String, output: Option<PathBuf>, open: bool) -> 
         }
         return Ok(());
     }
+    let temp = write_html_to_temp(&html)?;
     if open {
-        let temp = temp_html_path()?;
-        fs::write(&temp, html).with_context(|| format!("failed to write {}", temp.display()))?;
         if let Err(err) = open_in_browser(&temp) {
             eprintln!("warning: failed to open browser: {err}");
         }
-        println!("{}", temp.display());
-    } else {
-        io::stdout().write_all(html.as_bytes())?;
     }
+    println!("{}", temp.display());
     Ok(())
 }
 
@@ -52,6 +49,12 @@ fn temp_html_path() -> Result<PathBuf> {
     let file_name = format!("pyimporttime-{}.html", std::process::id());
     path.push(file_name);
     Ok(path)
+}
+
+fn write_html_to_temp(html: &str) -> Result<PathBuf> {
+    let temp = temp_html_path()?;
+    fs::write(&temp, html).with_context(|| format!("failed to write {}", temp.display()))?;
+    Ok(temp)
 }
 
 fn open_in_browser(path: &Path) -> Result<()> {
@@ -63,4 +66,20 @@ fn open_in_browser(path: &Path) -> Result<()> {
         bail!("xdg-open exited with status {}", status);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_html_to_temp_creates_file() {
+        let html = "<html><body>ok</body></html>";
+        let path = write_html_to_temp(html).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, html);
+
+        fs::remove_file(&path).unwrap();
+    }
 }
