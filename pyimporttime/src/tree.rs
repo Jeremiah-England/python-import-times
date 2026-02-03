@@ -28,7 +28,9 @@ impl Tree {
 }
 
 pub fn build_tree(text: &str) -> Result<Tree> {
-    let records = parse_import_time(text)?;
+    let mut records = parse_import_time(text)?;
+    // Import time logs are emitted after child imports complete, so reverse to build a pre-order tree.
+    records.reverse();
     build_tree_from_records(&records)
 }
 
@@ -108,5 +110,25 @@ import time:        3 |          3 |   b.c\n";
         assert!(names.contains(&"self"));
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn build_tree_handles_postorder_logs() {
+        let log = "\
+import time: self [us] | cumulative | imported package\n\
+import time:        1 |          1 |   child\n\
+import time:        2 |          3 | parent\n";
+        let tree = build_tree(log).expect("tree");
+        let parent_index = tree
+            .arena
+            .iter()
+            .position(|node| node.name == "parent")
+            .expect("parent");
+        let child_index = tree
+            .arena
+            .iter()
+            .position(|node| node.name == "child")
+            .expect("child");
+        assert!(tree.arena[parent_index].children.contains(&child_index));
     }
 }

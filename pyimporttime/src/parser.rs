@@ -9,6 +9,7 @@ pub struct ImportRecord {
 }
 
 pub fn parse_import_time(text: &str) -> Result<Vec<ImportRecord>> {
+    // Import time lines are emitted after the import completes, so the log is in post-order.
     let mut records = Vec::new();
     for (line_no, line) in text.lines().enumerate() {
         if let Some(record) = parse_import_line(line) {
