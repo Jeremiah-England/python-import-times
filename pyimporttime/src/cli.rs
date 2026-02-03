@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -151,29 +151,92 @@ fn run_command(
     open: bool,
     config: LayoutConfig,
 ) -> Result<()> {
-    let (exe, exe_args) = resolve_executable_script(python, &args)?;
-    let mut cmd = Command::new(exe);
-    cmd.args(exe_args);
-    cmd.env("PYTHONPROFILEIMPORTTIME", "1");
-    let output_data = cmd.output().context("failed to run command")?;
-    let text = String::from_utf8_lossy(&output_data.stderr).to_string();
+    let executable = Executable::from_python_and_args(python, &args)?;
+    let output_data = run_with_import_timing(&executable)?;
     if !output_data.status.success() {
-        eprintln!(
-            "warning: command exited with status {}",
-            output_data.status
-        );
+        eprintln!("warning: command exited with status {}", output_data.status);
     }
-    let html = build_graph_html(&text, &config)?;
+    let html = build_graph_html(&output_data.stderr, &config)?;
     write_html_or_open(html, output, open)
 }
 
-fn resolve_executable_script(python: &str, args: &[String]) -> Result<(PathBuf, Vec<String>)> {
-    if let Some(script_path) = find_python_script(args) {
-        let mut script_args = Vec::with_capacity(args.len().saturating_sub(1));
-        script_args.extend(args.iter().skip(1).cloned());
-        return Ok((script_path, script_args));
+struct Executable {
+    path: PathBuf,
+    args: Vec<String>,
+}
+
+impl Executable {
+    fn from_python_and_args(python: &str, args: &[String]) -> Result<Self> {
+        if let Some(script_path) = find_python_script(args) {
+            let mut script_args = Vec::with_capacity(args.len().saturating_sub(1));
+            script_args.extend(args.iter().skip(1).cloned());
+            return Ok(Self {
+                path: script_path,
+                args: script_args,
+            });
+        }
+        Ok(Self {
+            path: PathBuf::from(python),
+            args: args.to_vec(),
+        })
     }
-    Ok((PathBuf::from(python), args.to_vec()))
+}
+
+struct RunOutput {
+    stderr: String,
+    status: ExitStatus,
+}
+
+fn run_with_import_timing(executable: &Executable) -> Result<RunOutput> {
+    let mut cmd = Command::new(&executable.path);
+    cmd.args(&executable.args);
+    cmd.env("PYTHONPROFILEIMPORTTIME", "1");
+    let output_data = cmd.output().context("failed to run command")?;
+    Ok(RunOutput {
+        stderr: String::from_utf8_lossy(&output_data.stderr).to_string(),
+        status: output_data.status,
+    })
+}
+
+fn parse_command(input: &str, output: Option<PathBuf>) -> Result<()> {
+    let text = read_input(input)?;
+    let records = parse_import_time(&text)?;
+    let json = ParseJson {
+        records: records
+            .into_iter()
+            .map(record_to_json)
+            .collect(),
+    };
+    write_text_output(serde_json::to_string_pretty(&json)?, output)
+}
+
+fn graph_command(
+    input: &str,
+    output: Option<PathBuf>,
+    open: bool,
+    format: OutputFormat,
+    config: LayoutConfig,
+) -> Result<()> {
+    let text = read_input(input)?;
+    match format {
+        OutputFormat::Json => {
+            let graph = build_graph_json(&text, &config)?;
+            write_text_output(serde_json::to_string_pretty(&graph)?, output)
+        }
+        OutputFormat::Html => {
+            let html = build_graph_html(&text, &config)?;
+            write_html_or_open(html, output, open)
+        }
+    }
+}
+
+fn record_to_json(record: ImportRecord) -> ImportRecordJson {
+    ImportRecordJson {
+        name: record.name,
+        self_us: record.self_us,
+        cumulative_us: record.cumulative_us,
+        depth: record.depth,
+    }
 }
 
 fn find_python_script(args: &[String]) -> Option<PathBuf> {
@@ -218,47 +281,6 @@ fn is_python_shebang(path: &Path) -> Result<bool> {
     Ok(lower.contains("python"))
 }
 
-fn parse_command(input: &str, output: Option<PathBuf>) -> Result<()> {
-    let text = read_input(input)?;
-    let records = parse_import_time(&text)?;
-    let json = ParseJson {
-        records: records
-            .into_iter()
-            .map(record_to_json)
-            .collect(),
-    };
-    write_text_output(serde_json::to_string_pretty(&json)?, output)
-}
-
-fn graph_command(
-    input: &str,
-    output: Option<PathBuf>,
-    open: bool,
-    format: OutputFormat,
-    config: LayoutConfig,
-) -> Result<()> {
-    let text = read_input(input)?;
-    match format {
-        OutputFormat::Json => {
-            let graph = build_graph_json(&text, &config)?;
-            write_text_output(serde_json::to_string_pretty(&graph)?, output)
-        }
-        OutputFormat::Html => {
-            let html = build_graph_html(&text, &config)?;
-            write_html_or_open(html, output, open)
-        }
-    }
-}
-
-fn record_to_json(record: ImportRecord) -> ImportRecordJson {
-    ImportRecordJson {
-        name: record.name,
-        self_us: record.self_us,
-        cumulative_us: record.cumulative_us,
-        depth: record.depth,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_executable_script_prefers_shebang_script() {
+    fn executable_prefers_shebang_script() {
         let dir = make_temp_dir();
         let script = dir.join("vs");
         fs::write(&script, "#!/usr/bin/env python\nprint('hi')\n").unwrap();
@@ -288,22 +310,22 @@ mod tests {
             script.to_string_lossy().to_string(),
             "arg1".to_string(),
         ];
-        let (exe, exe_args) = resolve_executable_script("python", &args).unwrap();
+        let exe = Executable::from_python_and_args("python", &args).unwrap();
 
-        assert_eq!(exe, script);
-        assert_eq!(exe_args, vec!["arg1".to_string()]);
+        assert_eq!(exe.path, script);
+        assert_eq!(exe.args, vec!["arg1".to_string()]);
 
-        fs::remove_file(&exe).unwrap();
+        fs::remove_file(&exe.path).unwrap();
         fs::remove_dir(&dir).unwrap();
     }
 
     #[test]
-    fn resolve_executable_script_falls_back_to_python() {
+    fn executable_falls_back_to_python() {
         let args = vec!["-c".to_string(), "print('hi')".to_string()];
-        let (exe, exe_args) = resolve_executable_script("python3", &args).unwrap();
+        let exe = Executable::from_python_and_args("python3", &args).unwrap();
 
-        assert_eq!(exe, PathBuf::from("python3"));
-        assert_eq!(exe_args, args);
+        assert_eq!(exe.path, PathBuf::from("python3"));
+        assert_eq!(exe.args, args);
     }
 
     #[test]
@@ -313,6 +335,33 @@ mod tests {
             Commands::Run { open, .. } => assert!(open),
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn executable_resolves_script_from_path() {
+        let dir = make_temp_dir();
+        let script = dir.join("jp");
+        fs::write(&script, "#!/usr/bin/env python\nprint('hi')\n").unwrap();
+
+        let original_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", &dir);
+        }
+
+        let args = vec!["jp".to_string(), "--help".to_string()];
+        let exe = Executable::from_python_and_args("python", &args).unwrap();
+
+        assert_eq!(exe.path, script);
+        assert_eq!(exe.args, vec!["--help".to_string()]);
+
+        unsafe {
+            match original_path {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        fs::remove_file(&exe.path).unwrap();
+        fs::remove_dir(&dir).unwrap();
     }
 
     #[cfg(unix)]

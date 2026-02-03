@@ -25,22 +25,15 @@ pub fn write_text_output(text: String, output: Option<PathBuf>) -> Result<()> {
 }
 
 pub fn write_html_or_open(html: String, output: Option<PathBuf>, open: bool) -> Result<()> {
-    if let Some(path) = output {
-        fs::write(&path, html).with_context(|| format!("failed to write {}", path.display()))?;
-        if open {
-            if let Err(err) = open_in_browser(&path) {
-                eprintln!("warning: failed to open browser: {err}");
-            }
-        }
-        return Ok(());
-    }
-    let temp = write_html_to_temp(&html)?;
+    let target = html_output_target(output)?;
+    write_html_to_target(&html, &target)?;
+    let path = target.path();
     if open {
-        if let Err(err) = open_in_browser(&temp) {
+        if let Err(err) = open_in_browser(path) {
             eprintln!("warning: failed to open browser: {err}");
         }
     }
-    println!("{}", temp.display());
+    println!("{}", path.display());
     Ok(())
 }
 
@@ -51,10 +44,30 @@ fn temp_html_path() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn write_html_to_temp(html: &str) -> Result<PathBuf> {
-    let temp = temp_html_path()?;
-    fs::write(&temp, html).with_context(|| format!("failed to write {}", temp.display()))?;
-    Ok(temp)
+enum HtmlOutputTarget {
+    Path(PathBuf),
+    Temp(PathBuf),
+}
+
+impl HtmlOutputTarget {
+    fn path(&self) -> &Path {
+        match self {
+            HtmlOutputTarget::Path(path) | HtmlOutputTarget::Temp(path) => path,
+        }
+    }
+}
+
+fn html_output_target(output: Option<PathBuf>) -> Result<HtmlOutputTarget> {
+    if let Some(path) = output {
+        return Ok(HtmlOutputTarget::Path(path));
+    }
+    Ok(HtmlOutputTarget::Temp(temp_html_path()?))
+}
+
+fn write_html_to_target(html: &str, target: &HtmlOutputTarget) -> Result<()> {
+    let path = target.path();
+    fs::write(path, html).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
 }
 
 fn open_in_browser(path: &Path) -> Result<()> {
@@ -75,7 +88,10 @@ mod tests {
     #[test]
     fn write_html_to_temp_creates_file() {
         let html = "<html><body>ok</body></html>";
-        let path = write_html_to_temp(html).unwrap();
+        let target = html_output_target(None).unwrap();
+        let path = target.path().to_path_buf();
+
+        write_html_to_target(html, &target).unwrap();
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, html);

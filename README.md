@@ -5,10 +5,16 @@ CLI to visualize Python import-time profiling output (from `PYTHONPROFILEIMPORTT
 ## Quick start
 
 ```bash
-cargo run -- run --open -- python your_script.py
+cargo run -- run -- python your_script.py
 ```
 
-Generate HTML without opening a browser:
+Generate HTML without opening a browser (still writes a temp file and prints its path):
+
+```bash
+cargo run -- run --open=false -- python your_script.py
+```
+
+Write HTML to a specific path:
 
 ```bash
 cargo run -- run -o /tmp/pyimporttime.html -- python your_script.py
