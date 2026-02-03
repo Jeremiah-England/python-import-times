@@ -4,6 +4,32 @@ CLI to visualize Python import-time profiling output (from `PYTHONPROFILEIMPORTT
 
 ## Quick start
 
+Install directly from Git (no package index required):
+
+```bash
+cargo install --git https://github.com/Jeremiah-England/python-import-times --bin pyimporttime
+```
+
+Run the profiler:
+
+```bash
+pyimporttime run -- python your_script.py
+```
+
+Generate HTML without opening a browser (still writes a temp file and prints its path):
+
+```bash
+pyimporttime run --open=false -- python your_script.py
+```
+
+Write HTML to a specific path:
+
+```bash
+pyimporttime run -o /tmp/pyimporttime.html -- python your_script.py
+```
+
+If you prefer not to install, you can run from a local checkout:
+
 ```bash
 cargo run -- run -- python your_script.py
 ```
